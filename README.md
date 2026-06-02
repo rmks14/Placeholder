@@ -26,7 +26,8 @@ DaemonDeck is built as a practical DevOps/SRE dashboard: a React frontend, an Ex
 | Live updates | WebSocket |
 | Metrics | `systeminformation` |
 | Storage | SQLite with `better-sqlite3` |
-| Auth | JWT-style signed tokens, bcrypt password hashing |
+| Auth | `jsonwebtoken`, bcrypt password hashing |
+| Request hardening | Helmet, login rate limiting, Zod validation |
 | Deployment | Docker, Docker Compose, Nginx reverse proxy |
 
 ## Current Feature Status
@@ -51,7 +52,7 @@ DaemonDeck is built as a practical DevOps/SRE dashboard: a React frontend, an Ex
 | Nginx reverse proxy | Done |
 | Persistent SQLite Docker volume | Done |
 | Container healthchecks | Done |
-| Audit logs | Basic persistent audit logs |
+| Audit logs | Persistent logs with action, status, and IP address |
 | Alert rules | Basic persistent rules |
 | Service monitoring | Not yet |
 | Docker monitoring | Not yet |
@@ -231,6 +232,8 @@ CLIENT_URL=http://localhost:5173
 SESSION_TTL_MINUTES=60
 AUTH_TOKEN_SECRET=replace-with-a-long-random-local-secret
 DATABASE_PATH=./data/daemondeck.sqlite
+ENABLE_PROCESS_KILL=false
+TRUST_PROXY=false
 ```
 
 By default, the backend creates a local SQLite database at:
@@ -263,11 +266,19 @@ The dashboard classifies health as:
 
 - Demo credentials are for local development only.
 - Set a strong `AUTH_TOKEN_SECRET` before using the app outside local development.
-- Process kill actions are permission-gated and require confirmation in the UI.
-- The current JWT implementation is custom HMAC signing. A production version should use a maintained JWT library such as `jose` or `jsonwebtoken`.
-- Login rate limiting and request-body validation are planned but not implemented yet.
+- JWTs are signed and verified with `jsonwebtoken`.
+- Login attempts are rate limited and request bodies are validated with Zod.
+- Process kill actions are permission-gated, require UI confirmation, and stay disabled unless `ENABLE_PROCESS_KILL=true`.
+- Audit logs include action names, success/failure/blocked status, and request IP address when available.
 
 ## Development Checks
+
+Test backend:
+
+```bash
+cd backend
+npm test
+```
 
 Build backend:
 

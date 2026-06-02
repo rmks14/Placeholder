@@ -4,7 +4,15 @@ import path from "node:path";
 import bcrypt from "bcryptjs";
 import Database from "better-sqlite3";
 import dotenv from "dotenv";
-import type { AlertRule, LogEntry, LogLevel, Role, ServiceRecord, User } from "./types";
+import type {
+  AlertRule,
+  AuditStatus,
+  LogEntry,
+  LogLevel,
+  Role,
+  ServiceRecord,
+  User,
+} from "./types";
 
 dotenv.config();
 
@@ -25,10 +33,17 @@ type AlertRuleRow = {
 };
 
 type LogEntryRow = {
+  action: string | null;
   created_at: string;
   id: string;
+  ip_address: string | null;
   level: LogLevel;
   message: string;
+  status: AuditStatus | null;
+};
+
+type TableInfoRow = {
+  name: string;
 };
 
 const defaultDatabasePath = path.resolve(process.cwd(), "data", "daemondeck.sqlite");
@@ -67,9 +82,33 @@ db.exec(`
     id TEXT PRIMARY KEY,
     level TEXT NOT NULL CHECK (level IN ('info', 'warning', 'critical')),
     message TEXT NOT NULL,
+    action TEXT,
+    status TEXT CHECK (status IS NULL OR status IN ('success', 'failure', 'blocked')),
+    ip_address TEXT,
     created_at TEXT NOT NULL
   );
 `);
+
+function ensureActivityLogColumn(name: string, sql: string) {
+  const columns = db.prepare("PRAGMA table_info(activity_logs)").all() as TableInfoRow[];
+
+  if (!columns.some((column) => column.name === name)) {
+    db.exec(sql);
+  }
+}
+
+ensureActivityLogColumn(
+  "action",
+  "ALTER TABLE activity_logs ADD COLUMN action TEXT",
+);
+ensureActivityLogColumn(
+  "status",
+  "ALTER TABLE activity_logs ADD COLUMN status TEXT",
+);
+ensureActivityLogColumn(
+  "ip_address",
+  "ALTER TABLE activity_logs ADD COLUMN ip_address TEXT",
+);
 
 const demoUsers = [
   {
@@ -136,10 +175,13 @@ function mapAlertRule(row: AlertRuleRow): AlertRule {
 
 function mapLogEntry(row: LogEntryRow): LogEntry {
   return {
+    action: row.action,
     createdAt: row.created_at,
     id: row.id,
+    ipAddress: row.ip_address,
     level: row.level,
     message: row.message,
+    status: row.status,
   };
 }
 
@@ -209,13 +251,24 @@ function seedDatabase() {
 
   if (logCount.count === 0) {
     db.prepare(`
-      INSERT INTO activity_logs (id, level, message, created_at)
-      VALUES (@id, @level, @message, @createdAt)
+      INSERT INTO activity_logs (
+        id,
+        level,
+        message,
+        action,
+        status,
+        ip_address,
+        created_at
+      )
+      VALUES (@id, @level, @message, @action, @status, @ipAddress, @createdAt)
     `).run({
+      action: "system.startup",
       createdAt: nowIso(),
       id: crypto.randomUUID(),
+      ipAddress: null,
       level: "info",
       message: "Dashboard API started",
+      status: "success",
     });
   }
 }
@@ -299,7 +352,7 @@ export function getActivityLogs() {
   const rows = db
     .prepare(
       `
-        SELECT id, level, message, created_at
+        SELECT id, level, message, action, status, ip_address, created_at
         FROM activity_logs
         ORDER BY created_at DESC
         LIMIT 100
@@ -310,14 +363,37 @@ export function getActivityLogs() {
   return rows.map(mapLogEntry);
 }
 
-export function addLog(message: string, level: LogLevel = "info") {
+export function addLog(
+  message: string,
+  level: LogLevel = "info",
+  details: {
+    action?: string;
+    ipAddress?: string | null;
+    status?: AuditStatus;
+  } = {},
+) {
   db.prepare(`
-    INSERT INTO activity_logs (id, level, message, created_at)
-    VALUES (@id, @level, @message, @createdAt)
+    INSERT INTO activity_logs (
+      id,
+      level,
+      message,
+      action,
+      status,
+      ip_address,
+      created_at
+    )
+    VALUES (@id, @level, @message, @action, @status, @ipAddress, @createdAt)
   `).run({
+    action: details.action || null,
     createdAt: nowIso(),
     id: crypto.randomUUID(),
+    ipAddress: details.ipAddress || null,
     level,
     message,
+    status: details.status || null,
   });
+}
+
+export function closeDatabase() {
+  db.close();
 }

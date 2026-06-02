@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { getRequestIp } from "../audit";
 import { requireRole } from "../middleware/auth";
 import {
   getManagedProcessActions,
@@ -32,7 +33,11 @@ processesRouter.post("/process-actions/:id/restart", (req, res) => {
     return;
   }
 
-  const processRecord = restartProcess(req.params.id, session.user.username);
+  const processRecord = restartProcess(
+    req.params.id,
+    session.user.username,
+    getRequestIp(req),
+  );
 
   if (!processRecord) {
     res.status(404).json({ message: "Process action was not found." });
@@ -52,7 +57,11 @@ processesRouter.post("/processes/:id/restart", (req, res) => {
     return;
   }
 
-  const processRecord = restartProcess(req.params.id, session.user.username);
+  const processRecord = restartProcess(
+    req.params.id,
+    session.user.username,
+    getRequestIp(req),
+  );
 
   if (!processRecord) {
     res.status(404).json({ message: "Process was not found." });
@@ -72,7 +81,7 @@ processesRouter.delete("/processes/:id", (req, res) => {
     return;
   }
 
-  const result = killProcess(req.params.id, session.user.username);
+  const result = killProcess(req.params.id, session.user.username, getRequestIp(req));
 
   res.status(result.status).json({ message: result.message });
 });

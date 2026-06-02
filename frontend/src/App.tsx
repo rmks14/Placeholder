@@ -139,9 +139,12 @@ type LiveMetricsMessage = {
 };
 
 type LogEntry = {
+  action: string | null;
   id: string;
+  ipAddress: string | null;
   level: "info" | "warning" | "critical";
   message: string;
+  status: "success" | "failure" | "blocked" | null;
   createdAt: string;
 };
 
@@ -1258,9 +1261,17 @@ function LogsPanel({ apiRequest }: { apiRequest: ApiRequest }) {
 
       <div className="stack">
         {logs.map((log) => (
-          <p className={`log-line log-${log.level}`} key={log.id}>
-            {formatDateTime(log.createdAt)} - {log.message}
-          </p>
+          <article className={`log-line log-${log.level}`} key={log.id}>
+            <div>
+              <strong>{log.message}</strong>
+              <p className="muted">{formatDateTime(log.createdAt)}</p>
+            </div>
+            <div className="log-meta">
+              {log.action && <span>{log.action}</span>}
+              {log.status && <span>{log.status}</span>}
+              {log.ipAddress && <span>{log.ipAddress}</span>}
+            </div>
+          </article>
         ))}
       </div>
 

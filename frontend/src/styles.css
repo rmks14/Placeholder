@@ -473,10 +473,27 @@ th {
 }
 
 .log-line {
+  display: grid;
+  gap: 8px;
   margin: 0;
   padding-bottom: 12px;
   border-bottom: 1px solid #e2e8f0;
   color: #172026;
+}
+
+.log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.log-meta span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #475569;
+  background: #f1f5f9;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .log-warning {

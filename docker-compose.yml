@@ -9,6 +9,8 @@ services:
       SESSION_TTL_MINUTES: ${SESSION_TTL_MINUTES:-60}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-change-this-local-docker-secret}
       DATABASE_PATH: /app/data/daemondeck.sqlite
+      ENABLE_PROCESS_KILL: ${ENABLE_PROCESS_KILL:-false}
+      TRUST_PROXY: "true"
     volumes:
       - daemondeck-data:/app/data
     expose:

@@ -1,6 +1,7 @@
 export type Role = "viewer" | "operator" | "admin";
 export type HealthStatus = "Healthy" | "Warning" | "Critical";
 export type LogLevel = "info" | "warning" | "critical";
+export type AuditStatus = "success" | "failure" | "blocked";
 
 export type User = {
   id: string;
@@ -87,8 +88,11 @@ export type AlertRule = {
 };
 
 export type LogEntry = {
+  action: string | null;
   id: string;
+  ipAddress: string | null;
   level: LogLevel;
   message: string;
+  status: AuditStatus | null;
   createdAt: string;
 };

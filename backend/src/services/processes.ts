@@ -1,4 +1,5 @@
 import * as si from "systeminformation";
+import { isProcessKillEnabled } from "../config/security";
 import { addLog, services } from "../data";
 import type { ProcessRecord } from "../types";
 
@@ -40,37 +41,77 @@ export function getManagedProcessActions() {
   return services;
 }
 
-export function restartProcess(processId: string, username: string) {
+export function restartProcess(
+  processId: string,
+  username: string,
+  ipAddress?: string | null,
+) {
   const service = services.find((candidate) => candidate.id === processId);
 
   if (!service) {
-    addLog(`${username} tried to restart unknown process action ${processId}`, "warning");
+    addLog(`${username} tried to restart unknown process action ${processId}`, "warning", {
+      action: "process.restart",
+      ipAddress,
+      status: "failure",
+    });
     return null;
   }
 
   service.status = "running";
   service.lastRestartedAt = new Date().toISOString();
-  addLog(`${username} restarted ${service.name}`, "warning");
+  addLog(`${username} restarted ${service.name}`, "warning", {
+    action: "process.restart",
+    ipAddress,
+    status: "success",
+  });
 
   return service;
 }
 
-export function killProcess(processId: string, username: string) {
+export function killProcess(
+  processId: string,
+  username: string,
+  ipAddress?: string | null,
+) {
   const pid = Number(processId);
 
   if (!Number.isInteger(pid) || pid <= 0) {
-    addLog(`${username} tried to kill invalid process ${processId}`, "warning");
+    addLog(`${username} tried to kill invalid process ${processId}`, "warning", {
+      action: "process.kill",
+      ipAddress,
+      status: "failure",
+    });
     return { message: "Process ID must be a positive integer.", status: 400 };
   }
 
+  if (!isProcessKillEnabled()) {
+    addLog(`${username} tried to kill process ${pid}, but process kill is disabled`, "warning", {
+      action: "process.kill",
+      ipAddress,
+      status: "blocked",
+    });
+    return {
+      message: "Process kill is disabled. Set ENABLE_PROCESS_KILL=true to enable it.",
+      status: 403,
+    };
+  }
+
   if (pid === process.pid) {
-    addLog(`${username} tried to kill the dashboard API process`, "critical");
+    addLog(`${username} tried to kill the dashboard API process`, "critical", {
+      action: "process.kill",
+      ipAddress,
+      status: "blocked",
+    });
     return { message: "Refusing to stop the dashboard API process.", status: 400 };
   }
 
   try {
     process.kill(pid, "SIGTERM");
-    addLog(`${username} sent SIGTERM to process ${pid}`, "critical");
+    addLog(`${username} sent SIGTERM to process ${pid}`, "critical", {
+      action: "process.kill",
+      ipAddress,
+      status: "success",
+    });
 
     return { message: `Process ${pid} was sent SIGTERM.`, status: 200 };
   } catch (caughtError) {
@@ -80,11 +121,19 @@ export function killProcess(processId: string, username: string) {
         : "";
 
     if (code === "ESRCH") {
-      addLog(`${username} tried to kill missing process ${pid}`, "warning");
+      addLog(`${username} tried to kill missing process ${pid}`, "warning", {
+        action: "process.kill",
+        ipAddress,
+        status: "failure",
+      });
       return { message: "Process was not found.", status: 404 };
     }
 
-    addLog(`${username} tried to kill process ${pid}, but it failed`, "critical");
+    addLog(`${username} tried to kill process ${pid}, but it failed`, "critical", {
+      action: "process.kill",
+      ipAddress,
+      status: "failure",
+    });
     return { message: "Process could not be stopped.", status: 500 };
   }
 }

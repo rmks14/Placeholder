@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import dotenv from "dotenv";
 import type { Request, Response } from "express";
+import jwt from "jsonwebtoken";
 import { getUserById } from "../data";
 import type { CurrentSession, JwtPayload, PublicUser, Role, User } from "../types";
 
@@ -41,26 +42,6 @@ export function getBearerToken(req: Request) {
   return scheme?.toLowerCase() === "bearer" && token ? token : null;
 }
 
-function encodeJson(value: unknown) {
-  return Buffer.from(JSON.stringify(value)).toString("base64url");
-}
-
-function signJwtInput(input: string) {
-  return crypto
-    .createHmac("sha256", authTokenSecret)
-    .update(input)
-    .digest("base64url");
-}
-
-function signaturesMatch(actualSignature: string, expectedSignature: string) {
-  const actual = Buffer.from(actualSignature);
-  const expected = Buffer.from(expectedSignature);
-
-  return (
-    actual.length === expected.length && crypto.timingSafeEqual(actual, expected)
-  );
-}
-
 export function isRole(value: unknown): value is Role {
   return value === "viewer" || value === "operator" || value === "admin";
 }
@@ -96,60 +77,36 @@ function cleanupRevokedTokens() {
 export function createJwt(user: User) {
   cleanupRevokedTokens();
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const payload: JwtPayload = {
-    sub: user.id,
-    role: user.role,
-    iat: nowSeconds,
-    exp: nowSeconds + sessionTtlSeconds,
-    jti: crypto.randomUUID(),
-  };
-  const encodedHeader = encodeJson({ alg: "HS256", typ: "JWT" });
-  const encodedPayload = encodeJson(payload);
-  const signature = signJwtInput(`${encodedHeader}.${encodedPayload}`);
+  const token = jwt.sign(
+    {
+      role: user.role,
+      sub: user.id,
+    },
+    authTokenSecret,
+    {
+      algorithm: "HS256",
+      expiresIn: sessionTtlSeconds,
+      jwtid: crypto.randomUUID(),
+    },
+  );
+  const payload = jwt.decode(token);
 
-  return {
-    token: `${encodedHeader}.${encodedPayload}.${signature}`,
-    payload,
-  };
+  if (!isJwtPayload(payload)) {
+    throw new Error("Could not create a valid session token.");
+  }
+
+  return { token, payload };
 }
 
 export function verifyJwt(token: string): JwtPayload | null {
-  const tokenParts = token.split(".");
-
-  if (tokenParts.length !== 3) {
-    return null;
-  }
-
-  const [encodedHeader, encodedPayload, signature] = tokenParts;
-
-  if (!encodedHeader || !encodedPayload || !signature) {
-    return null;
-  }
-
-  const expectedSignature = signJwtInput(`${encodedHeader}.${encodedPayload}`);
-
-  if (!signaturesMatch(signature, expectedSignature)) {
-    return null;
-  }
+  cleanupRevokedTokens();
 
   try {
-    const header = JSON.parse(
-      Buffer.from(encodedHeader, "base64url").toString("utf8"),
-    ) as { alg?: unknown; typ?: unknown };
-    const payload = JSON.parse(
-      Buffer.from(encodedPayload, "base64url").toString("utf8"),
-    ) as unknown;
+    const payload = jwt.verify(token, authTokenSecret, {
+      algorithms: ["HS256"],
+    });
 
-    if (header.alg !== "HS256" || header.typ !== "JWT") {
-      return null;
-    }
-
-    if (!isJwtPayload(payload) || payload.exp <= Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-
-    if (revokedTokens.has(payload.jti)) {
+    if (!isJwtPayload(payload) || revokedTokens.has(payload.jti)) {
       return null;
     }
 
