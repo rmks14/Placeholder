@@ -59,9 +59,19 @@ adminRouter.patch("/admin/users/:id/role", (req, res) => {
     return;
   }
 
-  const updatedUser = updateUserRole(user.id, body.role);
+  if (user.id === session.user.id && user.role === "admin" && body.role !== "admin") {
+    addLog(`${session.user.username} tried to remove their own admin role`, "warning", {
+      action: "admin.user.role.update",
+      ipAddress,
+      status: "blocked",
+    });
+    res.status(409).json({ message: "Administrators cannot remove their own admin role." });
+    return;
+  }
 
-  if (!updatedUser) {
+  const result = updateUserRole(user.id, body.role);
+
+  if (result.status === "not_found") {
     addLog(`${session.user.username} could not update ${user.username}`, "warning", {
       action: "admin.user.role.update",
       ipAddress,
@@ -70,6 +80,18 @@ adminRouter.patch("/admin/users/:id/role", (req, res) => {
     res.status(404).json({ message: "User was not found." });
     return;
   }
+
+  if (result.status === "last_admin") {
+    addLog(`${session.user.username} tried to remove the last administrator role`, "warning", {
+      action: "admin.user.role.update",
+      ipAddress,
+      status: "blocked",
+    });
+    res.status(409).json({ message: "DaemonDeck must retain at least one administrator." });
+    return;
+  }
+
+  const updatedUser = result.user;
 
   addLog(`${session.user.username} changed ${updatedUser.username} to ${body.role}`, "warning", {
     action: "admin.user.role.update",

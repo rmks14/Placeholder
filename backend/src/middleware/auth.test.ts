@@ -9,8 +9,11 @@ test("jsonwebtoken sessions verify and can be revoked", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "daemondeck-auth-"));
   let closeDatabase: (() => void) | null = null;
 
-  process.env.AUTH_TOKEN_SECRET = "test-secret-at-least-local-only";
+  process.env.AUTH_TOKEN_SECRET =
+    "test-secret-that-is-at-least-thirty-two-bytes-long";
   process.env.DATABASE_PATH = path.join(dataDir, "test.sqlite");
+  process.env.DEMO_MODE = "true";
+  process.env.NODE_ENV = "test";
   process.env.SESSION_TTL_MINUTES = "60";
 
   t.after(() => {

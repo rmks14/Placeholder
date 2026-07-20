@@ -2,8 +2,10 @@ node_modules/
 dist/
 build/
 coverage/
-.env
-.env.local
+.env*
+!.env.docker.example
+!backend/.env.example
+!frontend/.env.example
 *.log
 npm-debug.log*
 *.tsbuildinfo

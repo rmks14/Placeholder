@@ -457,7 +457,7 @@ function LoginPage({
       <section className="panel">
         <p className="eyebrow">DaemonDeck</p>
         <h1>Sign in</h1>
-        <p className="description">Use one of the local demo accounts.</p>
+        <p className="description">Sign in with your DaemonDeck account.</p>
 
         <form className="login-form" onSubmit={handleSubmit}>
           <label>
@@ -469,7 +469,7 @@ function LoginPage({
                 setLoginError("");
                 onClearMessages();
               }}
-              placeholder="demo"
+              placeholder="username or email"
               required
               type="text"
               value={identifier}

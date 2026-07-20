@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
 import Database from "better-sqlite3";
-import dotenv from "dotenv";
+import { runtimeConfig } from "./config";
 import type {
   AlertRule,
   AuditStatus,
@@ -13,8 +13,6 @@ import type {
   ServiceRecord,
   User,
 } from "./types";
-
-dotenv.config();
 
 type UserRow = {
   email: string;
@@ -46,9 +44,14 @@ type TableInfoRow = {
   name: string;
 };
 
+export type UserRoleUpdateResult =
+  | { status: "not_found" }
+  | { status: "last_admin" }
+  | { status: "updated"; user: User };
+
 const defaultDatabasePath = path.resolve(process.cwd(), "data", "daemondeck.sqlite");
-const databasePath = process.env.DATABASE_PATH
-  ? path.resolve(process.env.DATABASE_PATH)
+const databasePath = runtimeConfig.databasePath
+  ? path.resolve(runtimeConfig.databasePath)
   : defaultDatabasePath;
 
 fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -149,6 +152,8 @@ const demoAlertRules = [
   },
 ];
 
+const legacyDemoUserIds = ["user-1", "user-2", "user-3"];
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -185,35 +190,81 @@ function mapLogEntry(row: LogEntryRow): LogEntry {
   };
 }
 
+function getUserCount() {
+  return (
+    db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number }
+  ).count;
+}
+
+function getAdminCount() {
+  return (
+    db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'").get() as {
+      count: number;
+    }
+  ).count;
+}
+
+function hasLegacyDemoUsers() {
+  const placeholders = legacyDemoUserIds.map(() => "?").join(", ");
+  const row = db
+    .prepare(`SELECT COUNT(*) AS count FROM users WHERE id IN (${placeholders})`)
+    .get(...legacyDemoUserIds) as { count: number };
+
+  return row.count > 0;
+}
+
+function insertUser(user: {
+  email: string;
+  id: string;
+  name: string;
+  password: string;
+  role: Role;
+  username: string;
+}) {
+  const createdAt = nowIso();
+
+  db.prepare(`
+    INSERT INTO users (
+      id,
+      name,
+      username,
+      email,
+      role,
+      password_hash,
+      created_at,
+      updated_at
+    )
+    VALUES (@id, @name, @username, @email, @role, @passwordHash, @createdAt, @updatedAt)
+  `).run({
+    ...user,
+    createdAt,
+    passwordHash: bcrypt.hashSync(user.password, 12),
+    updatedAt: createdAt,
+  });
+}
+
 function seedDatabase() {
-  const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get() as {
-    count: number;
-  };
+  if (runtimeConfig.isProductionLike && hasLegacyDemoUsers()) {
+    throw new Error(
+      "Legacy demo accounts were found in this production database. Remove or migrate user-1, user-2, and user-3 before starting DaemonDeck in production.",
+    );
+  }
 
-  if (userCount.count === 0) {
-    const insertUser = db.prepare(`
-      INSERT INTO users (
-        id,
-        name,
-        username,
-        email,
-        role,
-        password_hash,
-        created_at,
-        updated_at
-      )
-      VALUES (@id, @name, @username, @email, @role, @passwordHash, @createdAt, @updatedAt)
-    `);
-    const createdAt = nowIso();
-    const passwordHash = bcrypt.hashSync("password123", 12);
-
-    for (const user of demoUsers) {
-      insertUser.run({
-        ...user,
-        createdAt,
-        passwordHash,
-        updatedAt: createdAt,
+  if (getUserCount() === 0) {
+    if (runtimeConfig.demoMode) {
+      for (const user of demoUsers) {
+        insertUser({ ...user, password: "password123" });
+      }
+    } else if (runtimeConfig.bootstrapAdmin) {
+      insertUser({
+        ...runtimeConfig.bootstrapAdmin,
+        id: crypto.randomUUID(),
+        role: "admin",
       });
+    } else {
+      throw new Error(
+        "No users exist. Set INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_EMAIL, and INITIAL_ADMIN_PASSWORD, or set DEMO_MODE=true with NODE_ENV=development or test.",
+      );
     }
   }
 
@@ -221,7 +272,7 @@ function seedDatabase() {
     count: number;
   };
 
-  if (alertCount.count === 0) {
+  if (runtimeConfig.demoMode && alertCount.count === 0) {
     const insertAlertRule = db.prepare(`
       INSERT INTO alert_rules (
         id,
@@ -312,14 +363,30 @@ export function getUserByIdentifier(identifier: string) {
   return row ? mapUser(row) : null;
 }
 
-export function updateUserRole(id: string, role: Role) {
+const updateUserRoleTransaction = db.transaction((id: string, role: Role): UserRoleUpdateResult => {
+  const user = getUserById(id);
+
+  if (!user) {
+    return { status: "not_found" };
+  }
+
+  if (user.role === "admin" && role !== "admin" && getAdminCount() <= 1) {
+    return { status: "last_admin" };
+  }
+
   db.prepare("UPDATE users SET role = ?, updated_at = ? WHERE id = ?").run(
     role,
     nowIso(),
     id,
   );
 
-  return getUserById(id);
+  const updatedUser = getUserById(id);
+
+  return updatedUser ? { status: "updated", user: updatedUser } : { status: "not_found" };
+});
+
+export function updateUserRole(id: string, role: Role) {
+  return updateUserRoleTransaction(id, role);
 }
 
 export function getAlertRules() {
@@ -394,6 +461,13 @@ export function addLog(
   });
 }
 
+let databaseClosed = false;
+
 export function closeDatabase() {
+  if (databaseClosed) {
+    return;
+  }
+
   db.close();
+  databaseClosed = true;
 }

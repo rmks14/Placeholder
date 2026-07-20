@@ -1,36 +1,14 @@
 import crypto from "node:crypto";
-import dotenv from "dotenv";
 import type { Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import { runtimeConfig } from "../config";
 import { getUserById } from "../data";
 import type { CurrentSession, JwtPayload, PublicUser, Role, User } from "../types";
 
-dotenv.config();
-
-const configuredSessionTtlMinutes = Number(process.env.SESSION_TTL_MINUTES);
-const sessionTtlMinutes =
-  Number.isFinite(configuredSessionTtlMinutes) &&
-  configuredSessionTtlMinutes > 0
-    ? configuredSessionTtlMinutes
-    : 60;
-const sessionTtlSeconds = Math.floor(sessionTtlMinutes * 60);
-const authTokenSecret = getAuthTokenSecret();
+const sessionTtlSeconds = Math.floor(runtimeConfig.sessionTtlMinutes * 60);
+const authTokenSecret = runtimeConfig.authTokenSecret;
 const revokedTokens = new Map<string, number>();
-
-function getAuthTokenSecret() {
-  if (process.env.AUTH_TOKEN_SECRET) {
-    return process.env.AUTH_TOKEN_SECRET;
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("AUTH_TOKEN_SECRET must be set in production.");
-  }
-
-  console.warn(
-    "AUTH_TOKEN_SECRET is not set. Using an insecure development secret.",
-  );
-  return "dev-only-change-me";
-}
+const tokenRevocationListeners = new Set<(tokenId: string) => void>();
 
 export function publicUser(user: User): PublicUser {
   const { passwordHash: _passwordHash, ...safeUser } = user;
@@ -161,6 +139,24 @@ export function requireRole(req: Request, res: Response, allowedRoles: Role[]) {
 
 export function revokeToken(payload: JwtPayload) {
   revokedTokens.set(payload.jti, payload.exp);
+
+  for (const listener of tokenRevocationListeners) {
+    try {
+      listener(payload.jti);
+    } catch (error) {
+      // A transport-specific listener must not turn a successful logout into a
+      // failed request. It can independently close its affected connection.
+      console.error("Token revocation listener failed.", error);
+    }
+  }
+}
+
+export function subscribeToTokenRevocations(listener: (tokenId: string) => void) {
+  tokenRevocationListeners.add(listener);
+
+  return () => {
+    tokenRevocationListeners.delete(listener);
+  };
 }
 
 export function sessionExpiresAt(payload: JwtPayload) {

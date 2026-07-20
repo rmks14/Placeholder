@@ -65,16 +65,17 @@ end-to-end implementation yet.
 | Area | Status | Current limitation or outcome |
 | --- | --- | --- |
 | Login, logout, and protected routes | Implemented | JWT revocation is held in backend memory |
-| Viewer/operator/admin authorization | Implemented | Enforced by the API; production hardening remains |
-| SQLite users and bcrypt password hashes | Implemented | Fixed demo users are seeded on an empty database |
+| Viewer/operator/admin authorization | Implemented | Enforced by the API; token revocation remains in-memory until persistent sessions are added |
+| SQLite users and bcrypt password hashes | Implemented | Demo users require explicit `NODE_ENV=development` or `test` plus `DEMO_MODE=true`; non-demo databases require a bootstrap admin |
 | Server overview UI | Implemented | Describes the backend runtime, not an enrolled host |
 | CPU, memory, and disk metrics | Implemented | Collected from the backend machine/container |
 | Process list, search, sorting, and details | Implemented | Limited to processes visible to the backend runtime |
-| WebSocket live metrics and refresh controls | Implemented | A connected stream is not revalidated after upgrade |
+| WebSocket live metrics and refresh controls | Implemented | Revalidates sessions independently of the display interval and closes revoked sessions; token transport still needs a future URL-free design |
 | Metric trend chart | Implemented | Keeps only the current browser session's recent samples |
 | Loading, error, empty, and last-updated states | Implemented | Does not yet model agent stale/offline states |
 | Audit-log persistence | Implemented | Stores the latest 100 entries shown by the API |
 | Docker Compose, Nginx, data volume, and health checks | Implemented | Deploys the dashboard; it does not grant host observability |
+| Secure startup, JSON API errors, and graceful shutdown | Implemented | Production requires explicit credentials; persistent session revocation is still planned |
 | Opt-in process termination | Prototype | Sends `SIGTERM` inside the backend process namespace |
 | Managed service restarts | Prototype | Updates three hard-coded in-memory records only |
 | Alert-rule administration | Prototype | Persists enable/disable toggles but does not evaluate rules |
@@ -95,7 +96,12 @@ end-to-end implementation yet.
 | Operator | Viewer permissions plus current prototype process and managed-restart actions |
 | Admin | Operator permissions plus users, roles, alert toggles, and prototype system actions |
 
-Demo accounts:
+## Local Demo Mode
+
+Demo data is available only when both `NODE_ENV=development` (or `test`) and
+`DEMO_MODE=true` are set before the first start of an empty database. An omitted,
+misspelled, or deployment-specific `NODE_ENV` is treated as production-like and
+cannot enable demo mode. It creates the following development-only accounts:
 
 ```txt
 demo / password123
@@ -103,11 +109,13 @@ viewer / password123
 operator / password123
 ```
 
-The demo passwords are stored as bcrypt hashes in SQLite after the first backend start.
+The demo passwords are stored as bcrypt hashes in SQLite. Never enable demo mode
+or use these credentials on a production deployment.
 
 ## Demo Walkthrough
 
-1. Sign in with `demo / password123` for admin access.
+1. Start a fresh local database with `DEMO_MODE=true`, then sign in with
+   `demo / password123` for demo-only admin access.
 2. Open **Overview** to inspect the backend runtime's health, CPU, memory, disk,
    uptime, OS, kernel, process count, and threshold-derived health counts.
 3. Open **Metrics** to watch live CPU, memory, and disk charts. Change the refresh interval between `5s`, `10s`, `30s`, and `1m`, or pause live updates.
@@ -121,7 +129,7 @@ The demo passwords are stored as bcrypt hashes in SQLite after the first backend
 
 | Screen | Screenshot |
 | --- | --- |
-| Login | [docs/screenshots/login.png](docs/screenshots/login.png) |
+| Login | Re-capture pending; the previous image showed retired demo-account wording. |
 | Overview | [docs/screenshots/overview.png](docs/screenshots/overview.png) |
 | Metrics | [docs/screenshots/metrics.png](docs/screenshots/metrics.png) |
 | Processes | [docs/screenshots/processes.png](docs/screenshots/processes.png) |
@@ -187,8 +195,21 @@ host operations.
 ```bash
 cd backend
 npm install
+cp .env.example .env
 npm run dev
 ```
+
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+npm run dev
+```
+
+The example local configuration explicitly enables demo mode. For a non-demo
+database, set `DEMO_MODE=false` and configure the `INITIAL_ADMIN_*` values before
+the first start. A production backend requires a random, non-placeholder
+`AUTH_TOKEN_SECRET` of at least 32 characters.
 
 The API runs on:
 
@@ -199,6 +220,7 @@ http://localhost:5000
 ### 2. Frontend
 
 ```bash
+# From the repository root, or use `cd ../frontend` after the backend setup.
 cd frontend
 npm install
 npm run dev
@@ -222,10 +244,41 @@ DaemonDeck can also run as a two-container Docker Compose deployment:
 > runtime. It does not yet monitor or control the Docker host. The v1 design adds a
 > separate host-native agent instead of privileging these containers.
 
+Create a private Docker environment file from the tracked template, then fill in
+a generated token secret and the first administrator details. The administrator
+password must be at least 16 characters and no more than 72 UTF-8 bytes.
+
+```bash
+cp .env.docker.example .env.docker
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
+```
+
+PowerShell:
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
+```
+
+Copy the generated value into `AUTH_TOKEN_SECRET` in `.env.docker`, set all
+`INITIAL_ADMIN_*` values, and keep that file private. Production Compose always
+runs with `DEMO_MODE=false`. Once the first administrator has been created,
+remove the `INITIAL_ADMIN_*` values—especially the password—from `.env.docker`;
+they are ignored on later starts and do not need to remain a long-lived secret.
+
+If an existing Docker volume was created by an earlier release with demo users,
+the backend now refuses to start it in production. This security-baseline release
+does not provide an automatic migration that deletes those accounts. For a
+demo-only legacy volume, the supported transition is: back up anything needed,
+run `docker compose --env-file .env.docker down -v`, then start again with the
+new bootstrap settings. This deliberately removes the old users, alert rules, and
+audit logs. If that data must be preserved, do not deploy the production config
+until a data-preserving migration is available.
+
 Start the stack:
 
 ```bash
-docker compose up --build
+docker compose --env-file .env.docker up --build
 ```
 
 Open the app:
@@ -237,34 +290,21 @@ http://localhost:8080
 Stop the stack:
 
 ```bash
-docker compose down
+docker compose --env-file .env.docker down
 ```
 
 Stop the stack and remove the persisted SQLite volume:
 
 ```bash
-docker compose down -v
-```
-
-Set a stronger token secret before running outside local development:
-
-```bash
-AUTH_TOKEN_SECRET=replace-with-a-long-random-secret docker compose up --build
-```
-
-PowerShell:
-
-```powershell
-$env:AUTH_TOKEN_SECRET="replace-with-a-long-random-secret"
-docker compose up --build
+docker compose --env-file .env.docker down -v
 ```
 
 Healthchecks:
 
 ```bash
-docker compose ps
-docker compose exec backend node -e "fetch('http://127.0.0.1:5000/api/health').then(r => console.log(r.status))"
-docker compose exec frontend wget -qO- http://127.0.0.1/health
+docker compose --env-file .env.docker ps
+docker compose --env-file .env.docker exec backend node -e "fetch('http://127.0.0.1:5000/api/health').then(r => console.log(r.status))"
+docker compose --env-file .env.docker exec frontend wget -qO- http://127.0.0.1/health
 ```
 
 Nginx serves the frontend and proxies:
@@ -276,31 +316,54 @@ Nginx serves the frontend and proxies:
 
 ## Environment
 
-Optional local environment files:
+The backend setup in **Getting Started** creates `backend/.env`. To override the
+frontend API URL, copy `frontend/.env.example` to `frontend/.env` from the
+repository root:
 
 ```bash
-cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
 
 PowerShell:
 
 ```powershell
-Copy-Item backend/.env.example backend/.env
 Copy-Item frontend/.env.example frontend/.env
 ```
 
 Backend options:
 
 ```txt
+NODE_ENV=development
 PORT=5000
 CLIENT_URL=http://localhost:5173
 SESSION_TTL_MINUTES=60
-AUTH_TOKEN_SECRET=replace-with-a-long-random-local-secret
+AUTH_TOKEN_SECRET=
 DATABASE_PATH=./data/daemondeck.sqlite
+DEMO_MODE=true
+INITIAL_ADMIN_NAME=
+INITIAL_ADMIN_USERNAME=
+INITIAL_ADMIN_EMAIL=
+INITIAL_ADMIN_PASSWORD=
 ENABLE_PROCESS_KILL=false
 TRUST_PROXY=false
 ```
+
+`AUTH_TOKEN_SECRET` may be blank only for explicit local development or test,
+where DaemonDeck generates an ephemeral random secret and signs users out after a
+restart. Any other `NODE_ENV` value (including one that is missing) requires a
+non-placeholder secret of at least 32 characters.
+
+For a new non-demo database, set `DEMO_MODE=false` and provide
+`INITIAL_ADMIN_USERNAME`, `INITIAL_ADMIN_EMAIL`, and
+`INITIAL_ADMIN_PASSWORD` (at least 16 characters and at most 72 UTF-8 bytes).
+`INITIAL_ADMIN_NAME` is optional and defaults to the username. Bootstrap values
+are used only when no users exist, are never logged, and should be removed from a
+deployment environment after the first successful start.
+
+If you already have a local `backend/.env` from an earlier version, add
+`NODE_ENV=development` before using demo mode. Remove an old placeholder secret
+or replace it with a generated value; local development can otherwise use the
+ephemeral secret behavior above.
 
 By default, the backend creates a local SQLite database at:
 
@@ -330,8 +393,20 @@ The dashboard classifies health as:
 
 ## Security Notes
 
-- Demo credentials are for local development only.
-- Set a strong `AUTH_TOKEN_SECRET` before using the app outside local development.
+- Demo credentials are available only with explicit `NODE_ENV=development` or
+  `test` plus `DEMO_MODE=true`; all other environments reject them.
+- Production-like environments require a non-placeholder `AUTH_TOKEN_SECRET`
+  with at least 32 characters; Docker Compose does not provide a fallback secret.
+- A fresh non-demo database requires explicit bootstrap-administrator values;
+  their password is never logged, bcrypt input is capped at 72 UTF-8 bytes, and
+  the values can be removed after the first start.
+- The API prevents an administrator from demoting itself and transactionally
+  preserves at least one administrator.
+- API errors, malformed JSON, oversized request bodies, and unknown API paths
+  return JSON responses without application stack details.
+- During shutdown all new API work returns `503`, `/api/health` reports the
+  draining state, live streams close cleanly, and SQLite closes after active
+  server work has drained.
 - JWTs are signed and verified with `jsonwebtoken`.
 - Login attempts are rate limited and request bodies are validated with Zod.
 - Process kill actions are permission-gated, require UI confirmation, and stay

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getRequestIp } from "../audit";
 import { requireRole } from "../middleware/auth";
+import { asyncRoute } from "../middleware/errors";
 import {
   getManagedProcessActions,
   getProcesses,
@@ -10,13 +11,13 @@ import {
 
 export const processesRouter = Router();
 
-processesRouter.get("/processes", async (req, res) => {
+processesRouter.get("/processes", asyncRoute(async (req, res) => {
   if (!requireRole(req, res, ["viewer", "operator", "admin"])) {
     return;
   }
 
   res.json({ processes: await getProcesses() });
-});
+}));
 
 processesRouter.get("/process-actions", (req, res) => {
   if (!requireRole(req, res, ["operator", "admin"])) {
